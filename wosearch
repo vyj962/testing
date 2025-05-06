@@ -1,0 +1,1908 @@
+import { LightningElement, track, wire, api } from "lwc";
+import { NavigationMixin, CurrentPageReference } from "lightning/navigation";
+import { getPicklistValues } from "lightning/uiObjectInfoApi";
+import { getObjectInfo } from "lightning/uiObjectInfoApi";
+import reset from "@salesforce/label/c.CSX_CMP_ResetLabel";
+import search from "@salesforce/label/c.CSX_CMP_SearchLabel";
+import futureDate from "@salesforce/label/c.CSX_CMP_FutureDate_Label";
+import fromDateValidation from "@salesforce/label/c.IEMM_From_Date_Validation";
+import EndDate from "@salesforce/label/c.CSX_CMP_EndDate_Label";
+import WOI_OBJECT from "@salesforce/schema/IEMM_Work_Order_Invoice__c";
+import WOIBusinessTypePicklist from "@salesforce/schema/IEMM_Work_Order_Invoice__c.IEMM_Business_Type__c";
+import WOIInvoiceTypePicklist from "@salesforce/schema/IEMM_Work_Order_Invoice__c.IEMM_Invoice_Type__c";
+import fromDateBlankValidation from "@salesforce/label/c.IEMM_FromDateBlankValidation";
+import amountCriteria from "@salesforce/label/c.IEMM_AmountCriteria";
+import notificationRecordIdCCT from "@salesforce/label/c.IEMM_Notification_Record_Id_For_CCT";
+import notificationRecordIdLift from "@salesforce/label/c.IEMM_Notification_Record_Id_For_Lift";
+import { ShowToastEvent } from "lightning/platformShowToastEvent";
+import { csx_cmp_logError } from "c/csx_cmp_logError";
+import recordSizeLimit from "@salesforce/label/c.CSX_CMP_RecordLimit_Warning";
+import searchDataLimit from "@salesforce/label/c.IEMM_SearchDataLimitForWorkOrderInvoice";
+import { getListUi } from "lightning/uiListApi";
+import SERVICELOCATION_OBJECT from "@salesforce/schema/IEMM_Service_Location__c";
+import getwoiRecords from "@salesforce/apex/IEMM_WOInvoiceSearchController.getWOInvoiceRecords";
+import addAttachmentModel from "c/iemm_addAttachmentModelTemp";
+import approveSelectedRecords from "@salesforce/apex/IEMM_WoInvoiceApproveDeclineController.approveWorkOrderInvoiceRecords";
+import declineSelectedRecords from "@salesforce/apex/IEMM_WoInvoiceApproveDeclineController.declineWorkOrderInvoiceRecords";
+import getLoggedInUserDetails from "@salesforce/apex/IEMM_Utility.getLoggedInUserDetails";
+import getNotificationData from "@salesforce/apex/IEMM_Utility.getNotificationData";
+import getDeclinationDescription from "@salesforce/apex/IEMM_WoInvoiceApproveDeclineController.getDeclinationDescription";
+import { IsConsoleNavigation, getFocusedTabInfo, setTabLabel } from "lightning/platformWorkspaceApi";
+import getActiveServiceLocations from '@salesforce/apex/IEMM_Utility.getActiveServiceLocations';
+
+export default class Iemm_woInvoiceSearch extends NavigationMixin(LightningElement) {
+	@wire(IsConsoleNavigation) isConsoleNavigation;
+	pageSize = 50;
+	label = {
+		reset,
+		search,
+		futureDate,
+		EndDate,
+		recordSizeLimit,
+		searchDataLimit,
+		fromDateBlankValidation,
+		amountCriteria,
+		fromDateValidation
+	};
+
+	librariesLoaded = false;
+	shouldShowSpinner = false;
+	xlsHeader = []; // store all the headers of the the tables
+	workSheetNameList = [];
+	xlsData = [];
+	excelFileName = "WOISearchResults.xlsx";
+	sortByDetail = "woiID";
+	@track recordsToDisplay = [];
+	@track records = [];
+	@track formTypeOptions = [];
+	@track businessTypeOptions = [];
+	@track invoiceTypeOptions = [];
+	@track notificationData = "";
+	@track notificationList;
+	serviceLocationOptions = [];
+	searchResults = false;
+	shownoRecordError = false;
+	isLoaded = true;
+	selectedData = [];
+	displayDeclineCodePopup = false;
+	isPencilIconVisible = false;
+	AmountFromData;
+	AmountToData;
+	userLicense;
+	title;
+	userDetailsResult;
+	isDefaultValueAssigned = false;
+	isSalesforceUser = false;
+	isExperienceSiteUser = false;
+	@track isShowModal = false;
+	isNewButtonEnabled = true;
+	notificationRecordId;
+	//woStatus = [];
+	isdefaultValueChange = false;
+
+	disableSearchButton = false;
+	disableResetButton = false;
+	showTableData = false;
+	inputStartDate;
+	sortDirection = "asc";
+	startDateValue;
+	openExcelComponent = false;
+	endDateValue;
+	endDate = "";
+	showEndDate = false;
+	selectedRecords = [];
+	showBusinessTypeField = false;
+	showInvoiceTypeField = false;
+	showSupplierLookupCCT = false;
+	showSupplierLookupLift = false;
+	isApproveDeclineButtonVisible = true;
+	isCheckboxDisabled = true;
+	storedCriteria;
+	selectedServiceLocations = "Select An Option";
+
+	@track woiData = {
+		supplier: "",
+		serviceLocation: "",
+		formType: "",
+		formNumber: "",
+		businessType: "",
+		invoiceType: "",
+		amountfrom: "",
+		amountto: "",
+		equipmentInitial: "",
+		equipmentNumber: "",
+		status: "",
+		dateBuilt: "",
+		startDate: "",
+		endDate: "",
+		declinationCode: ""
+	};
+
+	@track woiData2 = {
+		supplier: "",
+		serviceLocation: "",
+		formType: "",
+		formNumber: "",
+		businessType: "",
+		invoiceType: "",
+		amountfrom: "",
+		amountto: "",
+		equipmentInitial: "",
+		equipmentNumber: "",
+		status: "",
+		dateBuilt: "",
+		startDate: "",
+		endDate: "",
+		declinationCode: ""
+	};
+
+	woiColumns = [
+		{
+			fieldName: "attachmentCount",
+			type: "button",
+			initialWidth: 40,
+			typeAttributes: {
+				label: { fieldName: "attachmentCount" },
+				name: "view_attachment",
+				iconName: "utility:attach",
+				variant: "base"
+			}
+		},
+		{
+			type: "button",
+			initialWidth: 30,
+			typeAttributes: {
+				variant: "base",
+				title: "Add Attachment",
+				name: "add_attachment",
+				iconName: "utility:add",
+				disabled: { fieldName: "isDisabled" }
+			}
+		},
+		{
+			label: "Supplier",
+			fieldName: "supplier",
+			type: "text",
+			typeAttributes: {
+				label: { fieldName: "supplier" },
+				tooltip: "Go to detail page",
+				target: "_blank"
+			},
+			sortable: "true",
+			initialWidth: 210
+		},
+		{
+			label: "Service Location",
+			fieldName: "serviceLocation",
+			hideDefaultActions: true,
+			type: "text",
+			sortable: "true",
+			initialWidth: 150
+		},
+		{
+			label: "Equipment",
+			fieldName: "equipment",
+			hideDefaultActions: true,
+			type: "text",
+			sortable: "true",
+			initialWidth: 100
+		},
+		{
+			label: "Number",
+			fieldName: "woiID",
+			type: "button",
+			typeAttributes: {
+				label: { fieldName: "formNumber" },
+				name: "invoiceNumber_click",
+				variant: "base"
+			},
+			sortable: true,
+			initialWidth: 95
+		},
+		{
+			label: "WO/Invoice Date",
+			fieldName: "workOrderInvoiceDate",
+			hideDefaultActions: true,
+			type: "date",
+			typeAttributes: { timeZone: "UTC", year: "numeric", month: "numeric", day: "numeric" },
+			sortable: "true",
+			initialWidth: 130
+		},
+		{
+			label: "Last Submission Date",
+			fieldName: "lastSubmissionDate",
+			hideDefaultActions: true,
+			type: "date",
+			typeAttributes: { timeZone: "UTC", year: "numeric", month: "numeric", day: "numeric" },
+			sortable: "true",
+			initialWidth: 150
+		},
+		{
+			label: "Service Date",
+			fieldName: "serviceDate",
+			hideDefaultActions: true,
+			type: "date",
+			typeAttributes: { timeZone: "UTC", year: "numeric", month: "numeric", day: "numeric" },
+			sortable: "true",
+			initialWidth: 130
+		},
+		{
+			label: "WO/Invoice Amount",
+			fieldName: "woInvoiceAmount",
+			hideDefaultActions: true,
+			type: "currency",
+			typeAttributes: { maximumFractionDigits: "3", currencyDisplayAs: "symbol" },
+			sortable: "true",
+			initialWidth: 150,
+			cellAttributes: { alignment: "left" }
+		},
+		{
+			label: "Approved Amount",
+			fieldName: "approvedAmount",
+			hideDefaultActions: true,
+			type: "currency",
+			typeAttributes: { maximumFractionDigits: "3", currencyDisplayAs: "symbol" },
+			sortable: "true",
+			initialWidth: 130,
+			cellAttributes: { alignment: "left" }
+		},
+		{
+			label: "Status",
+			fieldName: "status",
+			hideDefaultActions: true,
+			type: "text",
+			sortable: "true",
+			initialWidth: 150
+		},
+		{
+			label: "Status Date",
+			fieldName: "statusDate",
+			hideDefaultActions: true,
+			type: "date",
+			typeAttributes: { timeZone: "UTC", year: "numeric", month: "numeric", day: "numeric" },
+			sortable: "true",
+			initialWidth: 90
+		},
+		{
+			label: "Business Type",
+			fieldName: "businessType",
+			hideDefaultActions: true,
+			type: "text",
+			sortable: "true",
+			initialWidth: 120
+		},
+		{
+			label: "Invoice Type",
+			fieldName: "invoiceType",
+			hideDefaultActions: true,
+			type: "text",
+			sortable: "true",
+			initialWidth: 150
+		},
+		{
+			label: "Form",
+			fieldName: "formType",
+			hideDefaultActions: true,
+			type: "text",
+			sortable: "true",
+			initialWidth: 130
+		},
+		{
+			label: "Payment Method",
+			fieldName: "paymentMethod",
+			hideDefaultActions: true,
+			type: "text",
+			sortable: "true",
+			initialWidth: 130
+		},
+		{
+			label: "Amount Paid",
+			fieldName: "amountPaid",
+			hideDefaultActions: true,
+			type: "currency",
+			sortable: "true",
+			typeAttributes: { maximumFractionDigits: "3", currencyDisplayAs: "symbol" },
+			initialWidth: 130,
+			cellAttributes: { alignment: "left" }
+		},
+		{
+			label: "Check #",
+			fieldName: "checkNumber",
+			hideDefaultActions: true,
+			type: "text",
+			sortable: "true",
+			initialWidth: 130
+		},
+		{
+			label: "Payment Date",
+			fieldName: "paymentDate",
+			hideDefaultActions: true,
+			type: "date",
+			sortable: "true",
+			typeAttributes: { timeZone: "UTC", year: "numeric", month: "numeric", day: "numeric" },
+			initialWidth: 130
+		}
+	];
+
+	/*@wire(getListUi, { objectApiName: SERVICELOCATION_OBJECT, listViewApiName: "All" })
+	wiredServiceLocations({ data, error }) {
+		if (data) {
+			this.serviceLocationOptions = data.records.records.map((record) => ({
+				label: record.fields.Name.value,
+				value: record.id
+			}));
+
+			  // Now map the stored service location ids to labels
+            if (this.woiData && this.woiData.serviceLocation) {
+                const selectedLabels = this.woiData.serviceLocation.map(id => {
+                    const option = this.serviceLocationOptions.find(opt => opt.value === id);
+                    return option ? option.label : id; // In case label is not found, fallback to the ID
+                });
+                this.selectedServiceLocations = selectedLabels;
+                console.log('Selected Service Location Labels:', this.selectedServiceLocations);
+            }
+		} else if (error) {
+			console.error(error);
+		}
+	}*/
+
+	@wire(getActiveServiceLocations)
+    wiredLocations({ error, data }) {
+		console.log("active service locations",data);
+        if (data) {
+            // Sort alphabetically by Name
+            let sortedData = [...data].sort((a, b) => {
+                return a.Name.localeCompare(b.Name);
+            });
+
+            // Map to label/value format for combobox
+            this.serviceLocationOptions = sortedData.map(loc => ({
+                label: loc.Name,
+                value: loc.Id
+            }));
+			  if (this.woiData && this.woiData.serviceLocation) {
+                const selectedLabels = this.woiData.serviceLocation.map(id => {
+                    const option = this.serviceLocationOptions.find(opt => opt.value === id);
+                    return option ? option.label : id; // In case label is not found, fallback to the ID
+                });
+                this.selectedServiceLocations = selectedLabels;
+                console.log('Selected Service Location Labels:', this.selectedServiceLocations);
+            }
+        } else if (error) {
+            console.error('Error fetching service locations:', error);
+        }
+    }
+
+	@wire(getLoggedInUserDetails)
+	wiredAPSSupplierDetails({ error, data }) {
+		if (data) {
+			this.userDetailsResult = data;
+			this.userLicense = this.userDetailsResult.licenseName;
+			this.title = this.userDetailsResult.title;
+			if (
+				this.title === "IEMM Tax Auditor" ||
+				this.title === "IEMM Terminal Staff" ||
+				this.title === "IEMM Inspection User" ||
+				this.title === "IEMM Inspection Admin"
+			) {
+				this.isNewButtonEnabled = false;
+			}
+			if (this.title === "IEMM Tax Auditor" || this.title === "IEMM Terminal Staff") {
+				this.isApproveDeclineButtonVisible = false;
+				this.isCheckboxDisabled = true;
+			} else {
+				this.isApproveDeclineButtonVisible = true;
+				this.isCheckboxDisabled = false;
+			}
+			if (this.title === "IEMM System Admin") {
+				this.isPencilIconVisible = true;
+			}
+			console.log("userDetailsResult", this.userDetailsResult);
+			console.log("userLicense", this.userLicense);
+			console.log("title", this.title);
+			if (this.userLicense === "Salesforce" || this.userLicense === "Salesforce Platform") {
+				this.isSalesforceUser = true;
+				this.isExperienceSiteUser = false;
+				this.showSupplierLookupCCT = true;
+				this.showBusinessTypeField = true;
+			}
+			if (this.userLicense === "Customer Community Login") {
+				this.woiData.supplier = this.userDetailsResult.apSupplierId;
+				this.isSalesforceUser = false;
+				this.isExperienceSiteUser = true;
+				this.showBusinessTypeField = false;
+				this.showInvoiceTypeField = false;
+				this.isApproveDeclineButtonVisible = false;
+				this.isCheckboxDisabled = true;
+			}
+
+			// Set formTypeOptions based on user title
+			this.setFormTypeOptionsBasedOnUserTitle(this.title);
+		} else if (error) {
+			console.error("Error:", error);
+		}
+	}
+	getNotification(formtp) {
+		getNotificationData({ formType: formtp })
+			.then((res) => {
+				if (res.length > 0) {
+					this.notificationRecordId = res[0].Id;
+					if (new Date(res[0].IEMM_Expiration_Date__c) >= new Date()) {
+						this.notificationData = res[0].IEMM_Text__c;
+					} else {
+						this.notificationData = res[0].IEMM_Default_Text__c;
+					}
+				}
+			})
+			.catch((error) => {
+				console.log(error);
+			});
+	}
+
+	get columns() {
+		let columns = [...this.woiColumns];
+		if (this.woiData.formType === "Work Order CCT" || this.woiData.formType === "Invoice CCT") {
+			columns = columns.filter((column) => column.label !== "Invoice Type");
+			columns = columns.filter((column) => column.label !== "Service Date");
+		}
+		if (this.woiData.formType === "Work Order Lift" || this.woiData.formType === "Invoice Lift") {
+			columns = columns.filter((column) => column.label !== "Business Type");
+		}
+		if (this.title === "IEMM Tax Auditor" || this.title === "IEMM Terminal Staff") {
+			columns = columns.filter(
+				(column) =>
+					column.typeAttributes === undefined ||
+					column.typeAttributes.name !== "add_attachment"
+			);
+		}
+		if (this.woiData.formType === "Work Order CCT" || this.woiData.formType === "Work Order Lift") {
+			columns = columns.filter((column) => column.label !== "Payment Method");
+			columns = columns.filter((column) => column.label !== "Amount Paid");
+			columns = columns.filter((column) => column.label !== "Check #");
+			columns = columns.filter((column) => column.label !== "Payment Date");
+		}
+		if (this.userLicense === "Customer Community Login") {
+			columns = columns.filter((column) => column.label !== "Business Type");
+			columns = columns.filter((column) => column.label !== "Form");
+			columns = columns.filter((column) => column.label !== "Invoice Type");
+		}
+		return columns;
+	}
+
+	defaultValues = [{ value: "All Open Items", label: "All Open Items" }];
+
+	openModel(event) {
+		const callOpenModel = new CustomEvent("openmodal");
+		this.dispatchEvent(callOpenModel);
+	}
+
+	showModalBox() {
+		this.isShowModal = true;
+	}
+
+	hideModalBox() {
+		this.isShowModal = false;
+	}
+
+	handleSuccess(event) {
+		this.getNotification(this.woiData.formType);
+		this.dispatchEvent(
+			new ShowToastEvent({
+				title: "Success",
+				message: "Record updated successfully!",
+				variant: "success"
+			})
+		);
+		this.isShowModal = false;
+	}
+
+	handleBackClick(event) {
+		// Check if the modal is open
+		console.log("Call Popstate");
+		//history.pushState(null, null,this.getBaseURL()+'/lightning/n/IEMM_WO_Invoice');
+		this.close("okay");
+	}
+
+	// getBaseURL() {
+	//     const { protocol, hostname, port } = window.location;
+	//     return `${protocol}//${hostname}${port ? `:${port}` : ''}`;
+	// }
+
+	// currentURL;
+	// renderedCallBack(){
+	// 	this.currentURL = location.href;
+	// 	console.log('call rendered :',this.currentURL);
+	// 	history.pushState(null, null, location.href);
+	// }
+
+	connectedCallback() {
+		//window.addEventListener('popstate', this.handlePopState);
+		// window.onpopstate = () => {
+		//     this.handlePopState();
+		// };
+
+		//const storedCriteria = sessionStorage.getItem("woiSearchCriteria");
+		this.storedCriteria = sessionStorage.getItem("woiSearchCriteria");
+		console.log("storedCriteria", this.storedCriteria);
+
+		if (this.storedCriteria != null) {
+			this.woiData = JSON.parse(this.storedCriteria); // Restore search criteria
+			console.log("this.woiData ", this.woiData);
+			this.handleSearchClick(); // Re-run the search with the restored criteria
+		}
+
+		history.pushState(null, null, location.href);
+
+		window.onpopstate = () => {
+			this.handleBackClick();
+		};
+
+		if (this.storedCriteria == null) {
+			let newDateOptions = { year: "numeric", month: "2-digit", day: "2-digit" };
+			var today = new Date();
+			var curyear = today.getFullYear();
+			var curyearMonth = today.getMonth() + 1;
+			var curyearDay = today.getDate();
+			var lastYear = curyear - 1;
+			if (curyearMonth == 2 && curyearDay == 29) {
+				curyearDay = 28;
+			}
+			var lastYearDisplay =
+				("0000" + lastYear.toString()).slice(-4) +
+				"-" +
+				("00" + curyearMonth.toString()).slice(-2) +
+				"-" +
+				("00" + curyearDay.toString()).slice(-2);
+			var todayy =
+				("0000" + curyear.toString()).slice(-4) +
+				"-" +
+				("00" + curyearMonth.toString()).slice(-2) +
+				"-" +
+				("00" + curyearDay.toString()).slice(-2);
+			this.woiData.startDate = lastYearDisplay.toLocaleString("en-US", newDateOptions);
+			this.woiData.endDate = todayy.toLocaleString("en-US", newDateOptions);
+			this.notificationRecordId = notificationRecordIdCCT;
+
+			this.getNotification("Work Order CCT");
+			//this.woStatus = ["All Open Items"];
+		}
+	}
+
+	//to fetch Object details
+	@wire(getObjectInfo, { objectApiName: WOI_OBJECT })
+	WOI_OBJECT;
+
+	//fetch business type picklist values
+	@wire(getPicklistValues, {
+		recordTypeId: "$WOI_OBJECT.data.defaultRecordTypeId",
+		fieldApiName: WOIBusinessTypePicklist
+	})
+	businessTypeOptions({ data, error }) {
+		if (data) {
+			this.businessTypeOptions = data.values;
+		}
+	}
+	//fetch Invoice type picklist values
+	@wire(getPicklistValues, {
+		recordTypeId: "$WOI_OBJECT.data.defaultRecordTypeId",
+		fieldApiName: WOIInvoiceTypePicklist
+	})
+	invoiceTypeOptions({ data, error }) {
+		if (data) {
+			this.invoiceTypeOptions = data.values;
+		}
+	}
+
+	get formStatusOptionsMethod() {
+		if (this.woiData.status.length == 0) {
+			this.woiData.status = ["All Open Items"];
+		}
+		if (this.isdefaultValueChange === false) {
+			return [
+				{ label: "All Open Items", value: "All Open Items" },
+				{ label: "Work Order Approved", value: "Work Order Approved" },
+				{ label: "Work Order Cancelled", value: "Work Order Cancelled" },
+				{ label: "Work Order Declined", value: "Work Order Declined" },
+				{ label: "Work Order Complete", value: "Work Order Complete" },
+				{ label: "Draft Work Order", value: "Draft Work Order" },
+				{ label: "Work Order Revised", value: "Work Order Revised" },
+				{
+					label: "Need More Work Order Information From Supplier",
+					value: "Need More Work Order Information From Supplier"
+				},
+				{
+					label: "Work Order Pending Maintenance Approval",
+					value: "Work Order Pending Maintenance Approval"
+				}
+			];
+		} else if (this.woiData.formType === "Work Order CCT") {
+			return [
+				{ label: "All Open Items", value: "All Open Items" },
+				{ label: "Work Order Approved", value: "Work Order Approved" },
+				{ label: "Work Order Cancelled", value: "Work Order Cancelled" },
+				{ label: "Work Order Declined", value: "Work Order Declined" },
+				{ label: "Work Order Complete", value: "Work Order Complete" },
+				{ label: "Draft Work Order", value: "Draft Work Order" },
+				{ label: "Work Order Revised", value: "Work Order Revised" },
+				{
+					label: "Need More Work Order Information From Supplier",
+					value: "Need More Work Order Information From Supplier"
+				},
+				{
+					label: "Work Order Pending Maintenance Approval",
+					value: "Work Order Pending Maintenance Approval"
+				}
+			];
+		} else if (this.woiData.formType === "Work Order Lift") {
+			return [
+				{ label: "All Open Items", value: "All Open Items" },
+				{ label: "Work Order Approved", value: "Work Order Approved" },
+				{ label: "Work Order Cancelled", value: "Work Order Cancelled" },
+				{ label: "Work Order Complete", value: "Work Order Complete" },
+				{ label: "Work Order Declined", value: "Work Order Declined" },
+				{ label: "Draft Work Order", value: "Draft Work Order" },
+				{ label: "Work Order Revised", value: "Work Order Revised" },
+				{
+					label: "Need More Work Order Information From Supplier",
+					value: "Need More Work Order Information From Supplier"
+				},
+				{
+					label: "Work Order Pending Maintenance Approval",
+					value: "Work Order Pending Maintenance Approval"
+				}
+			];
+		} else if (this.woiData.formType === "Invoice CCT") {
+			return [
+				{ label: "All Open Items", value: "All Open Items" },
+				{ label: "Invoice Approved", value: "Invoice Approved" },
+				{ label: "Invoice Cancelled", value: "Invoice Cancelled" },
+				{ label: "Invoice Declined", value: "Invoice Declined" },
+				{ label: "Draft Invoice", value: "Draft Invoice" },
+				{
+					label: "Need More Invoice Information From Supplier",
+					value: "Need More Invoice Information From Supplier"
+				},
+				{
+					label: "Invoice Pending Maintenance Approval",
+					value: "Invoice Pending Maintenance Approval"
+				},
+				{ label: "Pending Further Research", value: "Pending Further Research" },
+				{ label: "Invoice Reviewed", value: "Invoice Reviewed" }
+			];
+		} else if (this.woiData.formType === "Invoice Lift") {
+			return [
+				{ label: "All Open Items", value: "All Open Items" },
+				{ label: "Invoice Approved", value: "Invoice Approved" },
+				{ label: "Invoice Cancelled", value: "Invoice Cancelled" },
+				{ label: "Invoice Declined", value: "Invoice Declined" },
+				{ label: "Draft Invoice", value: "Draft Invoice" },
+				{
+					label: "Need More Invoice Information From Supplier",
+					value: "Need More Invoice Information From Supplier"
+				},
+				{
+					label: "Invoice Pending Maintenance Approval",
+					value: "Invoice Pending Maintenance Approval"
+				},
+				{ label: "Pending Further Research", value: "Pending Further Research" }
+			];
+		}
+	}
+
+	setFormTypeOptionsBasedOnUserTitle(title) {
+		const options = [
+			{ label: "Work Order CCT", value: "Work Order CCT" },
+			{ label: "Work Order Lift", value: "Work Order Lift" },
+			{ label: "Invoice CCT", value: "Invoice CCT" },
+			{ label: "Invoice Lift", value: "Invoice Lift" }
+		];
+
+		if (title === "IEMM Terminal Staff" || title === "IEMM Lift and Hostler Supplier") {
+			// Filter to only include Lift options
+			this.formTypeOptions = options.filter((option) => option.label.includes("Lift"));
+		} else if (
+			title === "IEMM Inspection User" ||
+			title === "IEMM Inspection Admin" ||
+			title === "IEMM CCT Supplier"
+		) {
+			// Filter to only include CCT options
+			this.formTypeOptions = options.filter((option) => option.label.includes("CCT"));
+		} else {
+			// Default to all options
+			this.formTypeOptions = options;
+		}
+
+		this.storedCriteria = sessionStorage.getItem("woiSearchCriteria");
+
+		if (this.storedCriteria != null) {
+			this.woiData = JSON.parse(this.storedCriteria); // Restore search criteria
+		} else {
+			this.woiData.formType = this.formTypeOptions[0].value;
+		}
+	}
+
+	isModified(fieldName) {
+		return this.woiData2[fieldName] !== this.woiData[fieldName];
+	}
+
+	handleInputChange(event) {
+		try {
+			const previousFormType = this.woiData.formType; // Store the previous form type
+			this.woiData[event.target.name] = event.target.value;
+			this.woiData2[event.target.name] = event.target.value;
+
+			// Check if the form type has changed
+			if (event.target.name === "formType" && previousFormType !== this.woiData.formType) {
+				// Reset the status when the form type changes
+				this.woiData.status = ["All Open Items"]; // Reset to default status
+				//this.woStatus = this.woiData.status; // Update the local status variable
+
+				if (this.woiData.formType.includes("CCT")) {
+					this.woiData.invoiceType = ""; // Reset invoice type
+				} else {
+					this.woiData.businessType = ""; // Reset business type
+				}
+
+				// Clear the selected values in the dropdown
+				let dropdowns = this.template.querySelectorAll("c-csx_cmp_multi-select-dropdown");
+				dropdowns.forEach((dropdown) => {
+					if (dropdown.name === "status") {
+						dropdown.clearSelectedValues(); // Clear selected values in the status dropdown
+					}
+				});
+			}
+
+			if (this.isModified(event.target.name)) event.currentTarget.classList.add("dirty-field");
+			if (!this.isModified(event.target.name)) event.currentTarget.classList.remove("dirty-field");
+			let format = /[`!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~]/;
+			this.isdefaultValueChange = true;
+
+			this.disableResetButton = false;
+			this.disableSearchButton = false;
+			this.getNotification(this.woiData.formType);
+			if (
+				(this.woiData.formType === "Work Order CCT" &&
+					(this.userLicense === "Salesforce" ||
+						this.userLicense === "Salesforce Platform")) ||
+				(this.woiData.formType === "Invoice CCT" &&
+					(this.userLicense === "Salesforce" ||
+						this.userLicense === "Salesforce Platform"))
+			) {
+				this.showBusinessTypeField = true;
+				this.showInvoiceTypeField = false;
+				this.showSupplierLookupCCT = true;
+				this.showSupplierLookupLift = false;
+				this.notificationRecordId = notificationRecordIdCCT;
+			} else if (
+				(this.woiData.formType === "Work Order Lift" &&
+					(this.userLicense === "Salesforce" ||
+						this.userLicense === "Salesforce Platform")) ||
+				(this.woiData.formType === "Invoice Lift" &&
+					(this.userLicense === "Salesforce" ||
+						this.userLicense === "Salesforce Platform"))
+			) {
+				this.showBusinessTypeField = false;
+				this.showInvoiceTypeField = true;
+				this.showSupplierLookupCCT = false;
+				this.showSupplierLookupLift = true;
+				this.notificationRecordId = notificationRecordIdLift;
+			}
+			let AmountFromData = this.template.querySelector('[data-id="amount_from"]');
+			let AmountToData = this.template.querySelector('[data-id="amount_to"]');
+			if (this.woiData.startDate) {
+				this.startDateValue = this.woiData.startDate;
+				let inputDate = this.template.querySelector('[data-id="Start_Date"]');
+				let inputEndDate = this.template.querySelector('[data-id="End_Date"]');
+
+				if (this.startDateValue == null || this.startDateValue == "") {
+					this.endDate = "";
+					inputDate.value = "";
+					this.showEndDate = true;
+					//inputDate.setCustomValidity("");
+				} else {
+				let dateValue = inputDate.value;
+					var inputDateValue = new Date(dateValue);
+					this.inputStartDate = inputDateValue;
+					var today = new Date();
+					if (this.inputStartDate && inputDateValue > today) {
+						inputDate.setCustomValidity(this.label.fromDateValidation);
+						//this.endDate = "";
+						//this.template.querySelector('[data-id="End_Date"]').value = "";
+						this.showEndDate = false;
+						this.errorReport = true;
+					} else {
+						inputDate.setCustomValidity("");
+						this.showEndDate = false;
+						this.errorReport = false;
+						if (this.endDate) {
+							var endDateValue = new Date(this.endDate);
+							if (this.endDate && endDateValue < this.inputStartDate) {
+								inputDate.setCustomValidity(this.label.EndDate);
+								this.errorReport = true;
+								this.disableSearchButton = true;
+							} else {
+								inputEndDate.setCustomValidity("");
+								inputEndDate.reportValidity();
+								this.errorReport = false;
+								this.disableSearchButton = false;
+							}
+						}
+					}
+					inputDate.reportValidity();
+				}
+			}
+			if (this.woiData.endDate) {
+				let inputEndDate = this.template.querySelector('[data-id="End_Date"]');
+				let inputDate = this.template.querySelector('[data-id="Start_Date"]');
+				this.endDateValue = this.woiData.endDate;
+				let dateValue = inputEndDate.value;
+				var inputDateValue = new Date(dateValue);
+				this.inputDate = new Date(inputDate.value);
+				var today = new Date();
+				this.inputEndDate = new Date(inputEndDate.value);
+				if (this.inputEndDate && inputDateValue < this.inputDate) {
+					inputEndDate.setCustomValidity(this.label.EndDate);
+					this.errorReport = true;
+					this.disableSearchButton = true;
+				} else if (this.inputStartDate && inputDateValue > today) {
+					inputEndDate.setCustomValidity(this.label.futureDate);
+					this.errorReport = true;
+					this.disableSearchButton = true;
+				} else {
+					inputEndDate.setCustomValidity("");
+					inputDate.reportValidity();
+					inputEndDate.reportValidity();
+					this.errorReport = false;
+					this.disableSearchButton = false;
+				}
+				inputEndDate.reportValidity();
+			}
+			if (event.target.name === "endDate") {
+				if (!this.woiData.startDate) {
+					event.currentTarget.setCustomValidity(this.label.fromDateBlankValidation);
+					this.errorReport = true;
+					this.disableSearchButton = true;
+				} else {
+					//event.currentTarget.setCustomValidity("");
+					this.errorReport = false;
+					//this.disableSearchButton = false;
+				}
+			}
+			if (event.target.name === "startDate") {
+				let inputEndDate = this.template.querySelector('[data-id="End_Date"]');
+
+				// Check if start date is missing
+				if (!this.woiData.startDate) {
+					// Ensure inputEndDate exists before setting custom validity
+					if (inputEndDate) {
+						inputEndDate.setCustomValidity(this.label.fromDateBlankValidation);
+						inputEndDate.reportValidity(); // Trigger the display of the validation message
+					}
+					this.errorReport = true;
+					this.disableSearchButton = true;
+				} else {
+					// If start date is filled, remove the custom validity
+					if (inputEndDate) {
+						inputEndDate.setCustomValidity(""); // Clear the custom validity
+						inputEndDate.reportValidity(); // Ensure UI reflects the change
+					}
+					this.errorReport = false;
+					this.disableSearchButton = false;
+				}
+			}
+
+			if (event.target.name != "startDate" && event.target.name != "endDate") {
+				if (
+					format.test(event.target.value) &&
+					event.target.name != "startDate" &&
+					event.target.name != "endDate"
+				) {
+					event.target.setCustomValidity("Special Characters not allowed");
+					this.disableSearchButton = true;
+					return;
+				} else {
+					// If the input is valid, clear the custom validity
+					event.target.setCustomValidity("");
+					this.disableSearchButton = false;
+				}
+			}
+			this.AmountFromData = parseFloat(AmountFromData.value);
+			this.AmountToData = parseFloat(AmountToData.value);
+			if (this.AmountToData) {
+				if (this.AmountFromData > this.AmountToData) {
+					AmountToData.setCustomValidity(this.label.amountCriteria);
+				} else {
+					AmountToData.setCustomValidity("");
+				}
+				AmountToData.reportValidity();
+			}
+		} catch (error) {
+			console.log("exception error" + error);
+			let parameters = JSON.stringify(this.woiData);
+			csx_cmp_logError("Iemm_woInvoiceSearch", "handleInputChange", error, parameters);
+		}
+	}
+
+	handleStatusValueChange(event) {
+		const element = "All Open Items";
+		this.disableResetButton = false;
+		this.disableSearchButton = false;
+		this.woiData[event.target.name] = event.detail.values;
+		//this.woStatus = this.woiData.status;
+	}
+
+	handleLocationValueChange(event) {
+		this.disableResetButton = false;
+		this.disableSearchButton = false;
+		this.woiData[event.target.name] = event.detail.values;
+	}
+
+	handleEnter(event) {
+		if (event.keyCode === 13) {
+			this.handleSearchClick();
+		}
+	}
+
+	handleResetClick() {
+		this.template.querySelectorAll("lightning-input").forEach((element) => {
+			element.setCustomValidity("");
+			element.reportValidity();
+		});
+		//this.woStatus = ["All Open Items"];
+		this.woiData.status = ["All Open Items"];
+		let dropdowns = this.template.querySelectorAll("c-csx_cmp_multi-select-dropdown");
+		dropdowns.forEach((dropdown) => {
+			if (dropdown.name === "serviceLocation") {
+				dropdown.clearSelectedValues();
+				dropdown.clear();
+				dropdown.options = this.serviceLocationOptions;
+			} else if (dropdown.name === "status") {
+				dropdown.clearSelectedValues();
+				dropdown.clear();
+				dropdown.options = this.options;
+			}
+		});
+
+		this.disableResetButton = true;
+		this.searchResults = false;
+		this.showTableData = false;
+		this.shownoRecordError = false;
+		this.disableSearchButton = false;
+		this.isLoaded = true;
+		var today = new Date();
+		var lastYear = new Date();
+		lastYear.setFullYear(today.getFullYear() - 1);
+		var todayFormatted = today.toISOString().split("T")[0];
+		var lastYearFormatted = lastYear.toISOString().split("T")[0];
+
+		if (this.userLicense === "Salesforce" || this.userLicense === "Salesforce Platform") {
+			this.woiData = {
+				supplier: "",
+				serviceLocation: "",
+				formNumber: "",
+				businessType: "",
+				invoiceType: "",
+				amountfrom: "",
+				amountto: "",
+				formType: this.woiData.formType, // default value for form type
+				equipmentInitial: "",
+				equipmentNumber: "",
+				status: ["All Open Items"],
+				dateBuilt: "",
+				startDate: lastYearFormatted,
+				endDate: todayFormatted
+			};
+		}
+		if (this.userLicense === "Customer Community Login") {
+			this.woiData = {
+				supplier: this.userDetailsResult.apSupplierId,
+				serviceLocation: "",
+				formNumber: "",
+				businessType: "",
+				formType: this.woiData.formType, // default value for form type
+				invoiceType: "",
+				amountfrom: "",
+				amountto: "",
+				equipmentInitial: "",
+				equipmentNumber: "",
+				status: ["All Open Items"],
+				dateBuilt: "",
+				startDate: lastYearFormatted,
+				endDate: todayFormatted
+			};
+		}
+		if (this.userLicense === "Salesforce" || this.userLicense === "Salesforce Platform") {
+			let amountFromInput = this.template.querySelector('[data-id="amount_from"]');
+			let amountToInput = this.template.querySelector('[data-id="amount_to"]');
+
+			amountFromInput.value = "";
+			amountToInput.value = "";
+		}
+		sessionStorage.clear()
+		this.selectedServiceLocations = "Select An Option";
+		//this.woStatus = ["All Open Items"];
+	}
+
+	handleWOIRecordsDisplay(event) {
+		this.recordsToDisplay = event.detail;
+	}
+
+	xlsFormatter(data, sheetName) {
+		try {
+			let Header = Object.keys(data[0]);
+			this.xlsHeader.push(Header);
+			let uniqueSheetName = `WOIRecords_${this.workSheetNameList.length + 1}`;
+			this.workSheetNameList.push(uniqueSheetName);
+			this.xlsData.push(data);
+			this.template.querySelector("c-csx_cmp_excelexport").download();
+			this.xlsHeader = [];
+			this.workSheetNameList = [];
+			this.xlsData = [];
+		} catch (error) {
+			console.error(error);
+			let parameters = JSON.stringify(this.workSheetNameList);
+			csx_cmp_logError("iemm_woInvoiceSearch", "xlsFormatter", error, parameters);
+		}
+	}
+
+	//export records in CSV format
+	excelLibraryLoaded(event) {
+		this.librariesLoaded = true;
+		this.getHeaderExport();
+	}
+
+	//export records in CSV format \
+	getHeaderExport() {
+		try {
+			var listForExport = this.records.map(
+				function (obj) {
+					var tmp = {};
+
+					function formatDate(dateString) {
+						if (
+							dateString === "" ||
+							dateString === null ||
+							dateString === undefined
+						) {
+							return null;
+						}
+						var date = new Date(dateString);
+						var month = (date.getUTCMonth() + 1).toString().padStart(2, "0");
+						var day = date.getUTCDate().toString().padStart(2, "0");
+						var year = date.getUTCFullYear();
+						return `${month}/${day}/${year}`;
+					}
+
+					tmp["Supplier"] = obj.supplier;
+					tmp["Service Location"] = obj.serviceLocation;
+					tmp["Equipment"] = obj.equipment;
+					tmp["Number"] = obj.formNumber;
+					tmp["WO/Invoice Date"] = formatDate(obj.workOrderInvoiceDate);
+					tmp["Last Submission Date"] = formatDate(obj.lastSubmissionDate);
+					if (
+						this.woiData.formType === "Work Order Lift" ||
+						this.woiData.formType === "Invoice Lift"
+					) {
+						tmp["Service Date"] = formatDate(obj.serviceDate);
+					}
+					tmp["WO/Invoice Amount"] = obj.woInvoiceAmount;
+					tmp["Approved Amount"] = obj.approvedAmount;
+					tmp["Status"] = obj.status;
+					tmp["Status Date"] = formatDate(obj.statusDate);
+					if (
+						(this.userLicense === "Salesforce" ||
+							this.userLicense === "Salesforce Platform") &&
+						(this.woiData.formType === "Work Order CCT" ||
+							this.woiData.formType === "Invoice CCT")
+					) {
+						tmp["Business Type"] = obj.businessType;
+					}
+					if (
+						(this.userLicense === "Salesforce" ||
+							this.userLicense === "Salesforce Platform") &&
+						(this.woiData.formType === "Work Order Lift" ||
+							this.woiData.formType === "Invoice Lift")
+					) {
+						tmp["Invoice Type"] = obj.invoiceType;
+					}
+					if (
+						this.userLicense === "Salesforce" ||
+						this.userLicense === "Salesforce Platform"
+					) {
+						tmp["Form"] = obj.formType;
+					}
+					if (
+						this.woiData.formType === "Invoice CCT" ||
+						this.woiData.formType === "Invoice Lift"
+					) {
+						tmp["Payment Method"] = obj.paymentMethod;
+						tmp["Amount Paid"] = obj.amountPaid;
+						tmp["Check #"] = obj.checkNumber;
+						tmp["Payment Date"] = formatDate(obj.paymentDate);
+					}
+					return tmp;
+				}.bind(this)
+			);
+			this.xlsFormatter(listForExport, "WOIRecords");
+		} catch (error) {
+			console.error(error);
+			let parameters = JSON.stringify(this.xlsFormatter);
+			csx_cmp_logError("getHeaderExport", "getHeaderExport", error, parameters);
+		}
+	}
+
+	//export records in CSV format
+	dowloadRecords() {
+		this.openExcelComponent = true;
+		if (this.librariesLoaded) {
+			this.getHeaderExport();
+		}
+	}
+
+	handleSearchClick() {
+		console.log("inside handleSearchClick");
+		this.shownoRecordError = false;
+		this.showTableData = false;
+		this.showDetailButton = false;
+		//this.woiData.status = this.woStatus;
+
+		if (!this.woiData.status) {
+			this.template
+				.querySelector("c-iemm_custom-toast-message")
+				.showToast("error", "Status is a mandatory field. Please fill and retry.");
+			return;
+		}
+		this.paginatorRecords = [];
+		this.recordsToDisplay = [];
+		this.searchResult = false;
+		this.totalNumberOfRecords = "";
+		this.openExcelComponent = false;
+		this.isLoaded = false;
+		this.records = [];
+		this.recordToDisplay = true;
+
+		// Store search criteria in sessionStorage (stringified object)
+		sessionStorage.setItem("woiSearchCriteria", JSON.stringify(this.woiData));
+
+		let lndInfoMap = new Map();
+		lndInfoMap = Object.keys(this.woiData).reduce((map, key) => {
+			if (this.woiData[key]) {
+				map.set(key, this.woiData[key]);
+			}
+			return map;
+		}, new Map());
+
+		var obj = Object.fromEntries(lndInfoMap);
+		var woiDataStringCon = JSON.stringify(obj);
+		console.log("woiDataStringCon: " + woiDataStringCon);
+		this.showSpinner();
+		if (woiDataStringCon != "{}") {
+			getwoiRecords({ workorderInvoiceSearchParameters: woiDataStringCon })
+				.then((result) => {
+					console.log("result ::", result);
+					console.log("resultStatus ::", result.status);
+					if (result.status == 400 && String.isNotBlank(result.errorMessage)) {
+						this.template
+							.querySelector("c-iemm_custom-toast-message")
+							.showToast("error", this.label.recordSizeLimit);
+						this.hideSpinner();
+						return;
+					}
+					if (result) {
+						// this.records = result;
+						let finalData = result.results;
+						this.woiRecordslength = finalData.length;
+						console.log("result=> ", finalData.length);
+						console.log("result=> ", finalData);
+						if (finalData.length >= this.label.searchDataLimit) {
+							const selectionHeaderIssue = new ShowToastEvent({
+								message: this.label.recordSizeLimit,
+								duration: "3000",
+								variant: "warning"
+							});
+							this.dispatchEvent(selectionHeaderIssue);
+							this.isLoaded = true;
+							this.hideSpinner();
+							return;
+						}
+						if (finalData.length > 0) {
+							this.records = finalData.map((record) => ({
+								...record,
+								woiID: `/${record.woiID}`,
+								isDisabled:
+									record.status == "Invoice Approved" ||
+									record.status == "Invoice Cancelled" ||
+									record.status == "Invoice Declined" ||
+									record.status == "Work Order Approved" ||
+									record.status == "Work Order Cancelled" ||
+									record.status == "Work Order Declined" ||
+									(record.status ==
+										"Need More Work Order Information From Supplier" &&
+										(this.userLicense === "Salesforce" ||
+											this.userLicense ===
+												"Salesforce Platform")) ||
+									(record.status ==
+										"Need More Invoice Information From Supplier" &&
+										(this.userLicense === "Salesforce" ||
+											this.userLicense ===
+												"Salesforce Platform")) ||
+									(record.status ==
+										"Work Order Pending Maintenance Approval" &&
+										this.userLicense ==
+											"Customer Community Login") ||
+									(record.status ==
+										"Invoice Pending Maintenance Approval" &&
+										this.userLicense ==
+											"Customer Community Login")
+										? /*|| record.status == "Work Order Pending Maintenance Approval"|| record.status == "Invoice Pending Maintenance Approval"*/ true
+										: false
+							}));
+
+							this.showTableData = true;
+							this.showTable = true;
+							this.disableExportButton = false;
+							this.searchResults = true;
+							this.showDetailButton = true;
+							this.hideSpinner();
+							this.isLoaded = true;
+						} else {
+							this.hideSpinner();
+							this.showTable = false;
+							this.disableExportButton = true;
+							this.searchResults = false;
+							this.showDetailButton = false;
+							this.shownoRecordError = true;
+							this.isLoaded = true;
+						}
+					} else {
+						this.isSpinner = true;
+						this.shownoRecordError = true;
+					}
+				})
+				.catch((error) => {
+					// let parameters = this.statusKeyValue + ',' + this.claimNumber + ',' + this.selectedClaimType;
+					csx_cmp_logError("Iemm_woInvoiceSearch", "handleSearchClick", error);
+				});
+		} else {
+			const selectionHeaderIssue = new ShowToastEvent({
+				message: "Please enter atleast 1 search criteria",
+				duration: "5000",
+				variant: "error"
+			});
+			this.dispatchEvent(selectionHeaderIssue);
+			this.isLoaded = true;
+		}
+	}
+
+	doSortingDetail(event) {
+		let sortbyField = event.detail.fieldName;
+		if (sortbyField === "woiID") {
+			this.sortByDetail = "statusDate";
+		} else {
+			this.sortByDetail = sortbyField;
+		}
+		this.sortDirection = event.detail.sortDirection;
+		this.sortDataDetail(this.sortByDetail, this.sortDirection);
+		this.sortByDetail = sortbyField;
+	}
+
+	sortDataDetail(fieldName, sortDirection) {
+		let sortResult = Object.assign([], this.records);
+		this.records = sortResult.sort(function (a, b) {
+			a = a[fieldName] ? a[fieldName] : ""; // handling null values
+			b = b[fieldName] ? b[fieldName] : "";
+			if (a < b) {
+				return sortDirection === "asc" ? -1 : 1;
+			} else if (a > b) {
+				return sortDirection === "asc" ? 1 : -1;
+			} else {
+				return 0;
+			}
+		});
+		if (this.searchResults) {
+			this.searchResults = false;
+		} else {
+			this.searchResults = true;
+		}
+	}
+
+	handleRowAction(event) {
+		const row = event.detail.row;
+		const actionName = event.detail.action.name;
+		switch (actionName) {
+			case "view_attachment":
+				this.handleViewAttachmentClick(row.woiID, row.status);
+				break;
+			case "add_attachment":
+				this.handleAddAttachmentClick(row.woiID);
+				break;
+			case "invoiceNumber_click":
+				this.handleNameClick(row.woiID);
+				break;
+			default:
+				console.log(`Unknown action: ${actionName}`);
+		}
+	}
+
+	handleViewAttachmentClick(woiID, status) {
+		woiID = woiID.replace("/", "");
+		if (
+			(this.userLicense === "Salesforce" || this.userLicense === "Salesforce Platform") &&
+			this.title != "IEMM Tax Auditor" &&
+			this.title != "IEMM Terminal Staff"
+		) {
+			if (
+				status === "Draft Work Order" ||
+				status === "Work Order Revised" ||
+				status === "Need More Work Order Information From Supplier" ||
+				status === "Draft Invoice" ||
+				status === "Need More Invoice Information From Supplier" ||
+				status === "Pending Further Research" ||
+				status === "Invoice Reviewed" ||
+				status === "Work Order Complete" ||
+				status === "Work Order Pending Maintenance Approval" ||
+				status === "Invoice Pending Maintenance Approval" ||
+				status === "Pending Work Order Approval"
+			) {
+				if (!this.isConsoleNavigation) {
+				this[NavigationMixin.GenerateUrl]({
+					type: "standard__component",
+					attributes: {
+						componentName: "c__iemm_showAttachment"
+					},
+					state: {
+						c__recordId: woiID
+						
+						
+					}
+				}).then((url) => {
+					window.open(url, "_blank");
+				});
+			}
+			else{
+				this[NavigationMixin.Navigate]({
+					type: "standard__component",
+					attributes: {
+						componentName: "c__iemm_showAttachment"
+					},
+					state: {
+						c__recordId: woiID,
+						c__editableAttachment: false,
+						c__showDownloadButtonOnLockRecord: true
+						
+					}
+				})
+
+			}
+			} else if (
+				status === "Invoice Approved" ||
+				status === "Invoice Cancelled" ||
+				status === "Invoice Declined" ||
+				status === "Work Order Approved" ||
+				status === "Work Order Cancelled" ||
+				status === "Work Order Declined"
+				/*|| status === "Work Order Pending Maintenance Approval" || status === "Invoice Pending Maintenance Approval"*/
+			) {
+				/*this[NavigationMixin.GenerateUrl]({
+					type: "standard__component",
+					attributes: {
+						componentName: "c__iemm_showAttachment"
+					},
+					state: {
+						c__recordId: woiID,
+						c__editableAttachment: false,
+						c__showDownloadButtonOnLockRecord: true
+					}
+				}).then((url) => {
+					window.open(url, "_blank");
+				});*/ 
+				if (!this.isConsoleNavigation) {
+					this[NavigationMixin.GenerateUrl]({
+						type: "standard__component",
+						attributes: {
+							componentName: "c__iemm_showAttachment"
+						},
+						state: {
+							c__recordId: woiID,
+							c__editableAttachment: false,
+							c__showDownloadButtonOnLockRecord: true
+							
+							
+						}
+					}).then((url) => {
+						window.open(url, "_blank");
+					});
+				}
+				else{
+					this[NavigationMixin.Navigate]({
+						type: "standard__component",
+						attributes: {
+							componentName: "c__iemm_showAttachment"
+						},
+						state: {
+							c__recordId: woiID,
+							c__editableAttachment: false,
+							c__showDownloadButtonOnLockRecord: true
+							
+							
+						}
+					})
+				}
+			}
+		}
+
+		// Below Code is nevigate to community page
+		if (this.userLicense === "Customer Community Login") {
+			if (
+				status === "Draft Work Order" ||
+				status === "Work Order Revised" ||
+				status === "Need More Work Order Information From Supplier" ||
+				status === "Work Order Pending Maintenance Approval" ||
+				status === "Draft Invoice" ||
+				status === "Need More Invoice Information From Supplier" ||
+				status === "Invoice Pending Maintenance Approval" ||
+				status === "Pending Further Research" ||
+				status === "Invoice Reviewed" ||
+				status === "Work Order Complete" ||
+				status === "Pending Work Order Approval"
+			) {
+				/*this[NavigationMixin.GenerateUrl]({
+					type: "comm__namedPage",
+					attributes: {
+						name: "RelatedFileAttachment__c"
+					},
+					state: {
+						c__recordId: woiID,
+						c__editableAttachment: true
+					}
+				}).then((url) => {
+					window.open(url, "_blank");
+				});*/ 
+				if (!this.isConsoleNavigation) {
+					this[NavigationMixin.GenerateUrl]({
+						type: "comm__namedPage",
+					attributes: {
+						name: "RelatedFileAttachment__c"
+					},
+					state: {
+						c__recordId: woiID,
+						c__editableAttachment: true
+						}
+					}).then((url) => {
+						window.open(url, "_blank");
+					});
+				}
+				else{
+					this[NavigationMixin.Navigate]({
+						type: "standard__component",
+						attributes: {
+							componentName: "c__iemm_showAttachment"
+						},
+						state: {
+							c__recordId: woiID,
+							c__editableAttachment: true
+							
+							
+							
+						}
+					})
+				}
+			
+
+			} else if (
+				status === "Invoice Approved" ||
+				status === "Invoice Cancelled" ||
+				status === "Invoice Declined" ||
+				status === "Work Order Approved" ||
+				status === "Work Order Cancelled" ||
+				status === "Work Order Declined"
+			) {
+				/*this[NavigationMixin.GenerateUrl]({
+					type: "comm__namedPage",
+					attributes: {
+						name: "RelatedFileAttachment__c"
+					},
+					state: {
+						c__recordId: woiID,
+						c__editableAttachment: false,
+						c__showDownloadButtonOnLockRecord: true
+					}
+				}).then((url) => {
+					window.open(url, "_blank");
+				});*/ 
+				if (!this.isConsoleNavigation) {
+					this[NavigationMixin.GenerateUrl]({
+						type: "comm__namedPage",
+					attributes: {
+						name: "RelatedFileAttachment__c"
+					},
+					state: {
+						c__recordId: woiID,
+						c__editableAttachment: false,
+						c__showDownloadButtonOnLockRecord: true
+						}
+					}).then((url) => {
+						window.open(url, "_blank");
+					});
+				}
+				else{
+					this[NavigationMixin.Navigate]({
+						type: "standard__component",
+						attributes: {
+							componentName: "c__iemm_showAttachment"
+						},
+						state: {
+							c__recordId: woiID,
+							c__editableAttachment: false,
+						   c__showDownloadButtonOnLockRecord: true
+						}
+					})
+				}
+			}
+		}
+
+		if (
+			(this.userLicense === "Salesforce" || this.userLicense === "Salesforce Platform") &&
+			(this.title == "IEMM Tax Auditor" || this.title == "IEMM Terminal Staff")
+		) {
+			/*this[NavigationMixin.GenerateUrl]({
+				type: "standard__component",
+				attributes: {
+					componentName: "c__iemm_showAttachment"
+				},
+				state: {
+					c__recordId: woiID,
+					c__editableAttachment: false
+				}
+			}).then((url) => {
+				window.open(url, "_blank");
+			});*/ 
+			if (!this.isConsoleNavigation) {
+				this[NavigationMixin.GenerateUrl]({
+				type: "standard__component",
+				attributes: {
+					componentName: "c__iemm_showAttachment"
+				},
+				state: {
+					c__recordId: woiID,
+					c__editableAttachment: false
+					}
+				}).then((url) => {
+					window.open(url, "_blank");
+				});
+			}
+			else{
+				this[NavigationMixin.Navigate]({
+					type: "standard__component",
+					attributes: {
+						componentName: "c__iemm_showAttachment"
+					},
+					state: {
+						c__recordId: woiID,
+						c__editableAttachment: false
+					}
+				})
+			}
+		
+		}
+	}
+	async handleAddAttachmentClick(woiID) {
+		woiID = woiID.replace("/", "");
+		while (true) {
+			const result = await addAttachmentModel.open({
+				size: "large",
+				parentId: woiID,
+				defaultCategory: "Miscellaneous",
+				shouldDisableCategoryInput: true
+			});
+			this.handleSearchClick();
+
+			if (result !== "Saved&New") {
+				break;
+			}
+		}
+		history.pushState(null, null, location.href);
+	}
+
+	handleNameClick(woiID) {
+		woiID = woiID.replace("/", "");
+		this.showSpinner();
+		if (
+			(this.userLicense === "Salesforce" || this.userLicense === "Salesforce Platform") &&
+			(this.woiData.formType == "Work Order CCT" || this.woiData.formType == "Invoice CCT")
+		)
+			if (!this.isConsoleNavigation) {
+				{
+					// Generate URL
+					this[NavigationMixin.GenerateUrl]({
+						type: "standard__navItemPage",
+						attributes: {
+							apiName: "IEMM_WOInvoice_DetailPage_CCT"
+						},
+						state: {
+							c__recordId: woiID
+						}
+					}).then((url) => {
+						window.open(url, "_blank");
+						
+					});
+				}
+			} else {
+				console.log('inside else check');
+				this[NavigationMixin.Navigate]({
+					type: "standard__component",
+					attributes: {
+						componentName: "c__iemm_woInvoiceDetailCCT"
+					},
+					state: {
+						c__recordId: woiID
+					}
+				});
+               setTimeout(() => {
+	           this.hideSpinner();
+                 }, 2000); // Adjust timing if needed	
+			}
+		if (
+			(this.userLicense === "Salesforce" || this.userLicense === "Salesforce Platform") &&
+			(this.woiData.formType == "Work Order Lift" || this.woiData.formType == "Invoice Lift")
+		)
+			if (!this.isConsoleNavigation) {
+				{
+					// Generate URL
+					this[NavigationMixin.GenerateUrl]({
+						type: "standard__navItemPage",
+						attributes: {
+							apiName: "IEMM_WOInvoice_DetailPage_Lift"
+						},
+						state: {
+							c__recordId: woiID
+						}
+					}).then((url) => {
+						window.open(url, "_blank");
+					});
+				}
+			} else {
+				this[NavigationMixin.Navigate]({
+					type: "standard__component",
+					attributes: {
+						componentName: "c__iemm_woInvoiceDetailPageLift"
+					},
+					state: {
+						c__recordId: woiID
+					}
+				});
+			}
+
+		if (
+			this.userLicense === "Customer Community Login" &&
+			(this.woiData.formType == "Work Order CCT" || this.woiData.formType == "Invoice CCT")
+		) {
+			this[NavigationMixin.GenerateUrl]({
+				type: "comm__namedPage",
+				attributes: {
+					name: "WOInvoiceDetailPageCCT__c"
+				},
+				state: {
+					c__recordId: woiID
+				}
+			}).then((url) => {
+				window.open(url, "_blank");
+			});
+		}
+		if (
+			this.userLicense === "Customer Community Login" &&
+			(this.woiData.formType == "Work Order Lift" || this.woiData.formType == "Invoice Lift")
+		) {
+			this[NavigationMixin.GenerateUrl]({
+				type: "comm__namedPage",
+				attributes: {
+					name: "WOInvoiceDetailPageLift__c"
+				},
+				state: {
+					c__recordId: woiID
+				}
+			}).then((url) => {
+				window.open(url, "_blank");
+			});
+		}
+		//this.hideSpinner();
+	}
+
+	getSelectedData(event) {
+		const selectedRows = event.detail.selectedRows;
+		this.selectedRecords = selectedRows.map((row) => row.woiID);
+		this.rowStatus = selectedRows.map((row) => row.status);
+	}
+
+	handleApproveSelectedRecords() {
+		if (this.selectedRecords.length === 0) {
+			// Show a warning message if no records are selected
+			const toastEvent = new ShowToastEvent({
+				title: "Warning",
+				message: "Please select at least one record to approve.",
+				variant: "warning"
+			});
+			this.dispatchEvent(toastEvent);
+		} else if (
+			this.selectedRecords.length > 0 &&
+			this.rowStatus.some((status) =>
+				[
+					"Work Order Approved",
+					"Work Order Declined",
+					"Invoice Approved",
+					"Work Order Cancelled",
+					"Need More Work Order Information From Supplier",
+					"Invoice Reviewed",
+					"Invoice Cancelled",
+					"Need More Invoice Information From Supplier",
+					"Pending Further Research",
+					"Draft Work Order",
+					"Draft Invoice",
+					"Invoice Declined"
+				].includes(status)
+			)
+		) {
+			// Show a warning message if any of the selected records are in 'Invoice Approved', 'Invoice Declined', or 'Invoice Cancelled' status
+			const toastEvent = new ShowToastEvent({
+				title: "Warning",
+				message: "You cannot select records with status Draft, Approved, Declined, Reviewed, Cancelled, Pending Further research, Need Information From Supplier",
+				variant: "warning"
+			});
+			this.dispatchEvent(toastEvent);
+		} else if (this.selectedRecords.length > 0) {
+			approveSelectedRecords({ recordIds: this.selectedRecords, formType: this.woiData.formType })
+				.then((result) => {
+					console.log("Approval result:", result);
+					if (result) {
+						const toastEvent = new ShowToastEvent({
+							title: "Success",
+							message: "Selected records approved successfully.",
+							variant: "success"
+						});
+						this.dispatchEvent(toastEvent);
+						this.handleSearchClick();
+					} else {
+						const toastEvent = new ShowToastEvent({
+							title: "Error",
+							message: "Failed to approve selected records.",
+							variant: "error"
+						});
+						this.dispatchEvent(toastEvent);
+					}
+				})
+				.catch((error) => {
+					csx_cmp_logError("Iemm_woInvoiceSearch", "handleApproveSelectedRecords", error);
+				});
+		}
+	}
+
+	handleDeclinationChange(event) {
+		const selectedCode = event.target.value;
+		this.woiData.declinationCode = selectedCode;
+		getDeclinationDescription({ recId: this.woiData.declinationCode }).then((res) => {
+			this.woiData.DeclinationDesc = res[0].IEMM_Description__c;
+		});
+	}
+
+	handleDecline() {
+		if (this.selectedRecords.length === 0) {
+			const toastEvent = new ShowToastEvent({
+				title: "Warning",
+				message: "Please select at least one record to decline.",
+				variant: "warning"
+			});
+			this.dispatchEvent(toastEvent);
+		} else if (
+			this.rowStatus.some((status) =>
+				[
+					"Work Order Approved",
+					"Work Order Declined",
+					"Invoice Approved",
+					"Work Order Cancelled",
+					"Need More Work Order Information From Supplier",
+					"Invoice Reviewed",
+					"Invoice Cancelled",
+					"Need More Invoice Information From Supplier",
+					"Pending Further Research",
+					"Draft Work Order",
+					"Draft Invoice",
+					"Invoice Declined"
+				].includes(status)
+			)
+		) {
+			const toastEvent = new ShowToastEvent({
+				title: "Warning",
+				message: "You cannot select records with status Draft, Approved, Declined, Reviewed, Cancelled, Pending Further research, Need Information From Supplier",
+				variant: "warning"
+			});
+			this.dispatchEvent(toastEvent);
+		} else if (this.selectedRecords.length > 0) {
+			this.displayDeclineCodePopup = true;
+		}
+	}
+
+	closeModal() {
+		this.woiData.DeclinationDesc = "";
+		this.displayDeclineCodePopup = false;
+	}
+
+	handleDeclineSelectedRecords() {
+		let declinationCode = this.woiData.declinationCode;
+
+		if (
+			this.selectedRecords.length > 0 &&
+			this.rowStatus.some((status) =>
+				[
+					"Work Order Approved",
+					"Work Order Declined",
+					"Invoice Approved",
+					"Work Order Cancelled",
+					"Need More Work Order Information From Supplier",
+					"Invoice Reviewed",
+					"Invoice Cancelled",
+					"Need More Invoice Information From Supplier",
+					"Pending Further Research",
+					"Draft Work Order",
+					"Draft Invoice"
+				].includes(status)
+			)
+		) {
+			const toastEvent = new ShowToastEvent({
+				title: "Warning",
+				message: "You cannot select invoice records with status Draft,Approved, Declined, Reviewed, Cancelled, Pending Further Research, Need Information From Supplier",
+				variant: "warning"
+			});
+			this.dispatchEvent(toastEvent);
+		} else if (!declinationCode) {
+			const toastEvent = new ShowToastEvent({
+				title: "Warning",
+				message: "Declination code is required to decline the selected records.",
+				variant: "warning"
+			});
+			this.dispatchEvent(toastEvent);
+		} else {
+			// Proceed with declining records
+			declineSelectedRecords({
+				recordIds: this.selectedRecords,
+				data: declinationCode,
+				formType: this.woiData.formType
+			})
+				.then((result) => {
+					console.log("Decline result:", result);
+					if (result) {
+						const toastEvent = new ShowToastEvent({
+							title: "Success",
+							message: "Selected records declined.",
+							variant: "success"
+						});
+						this.dispatchEvent(toastEvent);
+						// Close the modal after successful decline
+						this.displayDeclineCodePopup = false; // Close the modal
+						this.handleSearchClick(); // Refresh or handle any necessary actions
+						this.woiData.DeclinationDesc = "";
+					} else {
+						const toastEvent = new ShowToastEvent({
+							title: "Error",
+							message: "Failed to decline selected records.",
+							variant: "error"
+						});
+						this.dispatchEvent(toastEvent);
+					}
+				})
+				.catch((error) => {
+					csx_cmp_logError("Iemm_woInvoiceSearch", "handleDeclineSelectedRecords", error);
+				});
+		}
+	}
+	showSpinner() {
+		this.shouldShowSpinner = true;
+	}
+
+	hideSpinner() {
+		this.shouldShowSpinner = false;
+	}
+
+	handlePageSizeChange(event) {
+		this.pageSize = event.detail;
+	}
+}
